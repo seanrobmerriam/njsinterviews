@@ -61,7 +61,7 @@ const LANGUAGE_LABELS: Record<Language, string> = {
   HTML: "HTML",
 };
 
-const BOTTOM_TABS = ["Test Cases", "Results"] as const;
+const BOTTOM_TABS = ["Test Cases", "Results", "Saved"] as const;
 type BottomTab = (typeof BOTTOM_TABS)[number];
 
 export function CodeWorkspace({
@@ -84,7 +84,10 @@ export function CodeWorkspace({
   const [submission, setSubmission] = useState<SubmissionState | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [revealedHints, setRevealedHints] = useState<number[]>([]);
+  const [hintTexts, setHintTexts] = useState<Record<number, string>>({});
   const [hintError, setHintError] = useState<string | null>(null);
   const [activeDescTab, setActiveDescTab] = useState<"description" | "hints">("description");
 
@@ -156,25 +159,47 @@ export function CodeWorkspace({
     }
   }, [problemId, language, code]);
 
-  const handleRevealHint = useCallback(
-    async (index: number) => {
+  const handleSave = useCallback(async () => {
+    if (userTier === "FREE") {
+      alert("Upgrade to Pro to save solutions.");
+      return;
+    }
+    setIsSaving(true);
+    try {
+      await fetch("/api/solutions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ problemId, language, code }),
+      });
+      setSavedAt(new Date());
+      setBottomTab("Saved");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [problemId, language, code, userTier]);
+
+  const handleRevealHint = useCallback(    async (index: number) => {
       if (userTier === "FREE") {
         setHintError("Upgrade to Pro to unlock AI hints.");
         return;
       }
       try {
-        await fetch("/api/hints", {
+        const res = await fetch("/api/hints", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ problemId, hintIndex: index }),
+          body: JSON.stringify({ problemId, hintLevel: index, code, language }),
         });
-        setRevealedHints((prev) => [...prev, index]);
-        setHintError(null);
+        const { hint } = (await res.json()) as { hint?: string };
+        if (hint) {
+          setRevealedHints((prev) => [...prev, index]);
+          setHintTexts((prev) => ({ ...prev, [index]: hint }));
+          setHintError(null);
+        }
       } catch {
         setHintError("Failed to load hint.");
       }
     },
-    [problemId, userTier],
+    [problemId, userTier, code, language],
   );
 
   return (
@@ -229,23 +254,28 @@ export function CodeWorkspace({
           {activeDescTab === "hints" && (
             <div className="space-y-3">
               <p className="text-sm text-zinc-500">
-                {hints.length} hint{hints.length !== 1 ? "s" : ""} available
+                AI-generated hints based on your current code. {hints.length > 0 ? `${hints.length} levels available.` : ""}
               </p>
               {hintError && (
                 <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
                   {hintError}
                 </p>
               )}
-              {hints.map((hint, i) => (
+              {[0, 1, 2].map((i) => (
                 <div key={i} className="rounded-lg border border-zinc-200 dark:border-zinc-800">
                   {revealedHints.includes(i) ? (
-                    <div className="p-3 text-sm text-zinc-700 dark:text-zinc-300">{hint}</div>
+                    <div className="p-3 text-sm text-zinc-700 dark:text-zinc-300">
+                      <p className="mb-1 text-xs font-semibold text-zinc-400">Hint {i + 1}</p>
+                      <p className="whitespace-pre-wrap">{hintTexts[i] ?? "Loading…"}</p>
+                    </div>
                   ) : (
                     <button
                       onClick={() => handleRevealHint(i)}
-                      className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 hover:bg-zinc-50 dark:text-indigo-400 dark:hover:bg-zinc-900"
+                      disabled={userTier === "FREE"}
+                      className="w-full px-3 py-2.5 text-left text-sm text-indigo-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:text-zinc-400 dark:text-indigo-400 dark:hover:bg-zinc-900"
                     >
-                      Reveal Hint {i + 1}
+                      {userTier === "FREE" ? "🔒 " : ""}Hint {i + 1}{" "}
+                      <span className="text-xs text-zinc-400">{i === 0 ? "(general)" : i === 1 ? "(approach)" : "(specific)"}</span>
                     </button>
                   )}
                 </div>
@@ -274,6 +304,15 @@ export function CodeWorkspace({
           </select>
 
           <div className="ml-auto flex gap-2">
+            <button
+              onClick={handleSave}
+              disabled={isSaving || userTier === "FREE"}
+              aria-label="Save solution"
+              title={userTier === "FREE" ? "Pro feature" : savedAt ? `Saved at ${savedAt.toLocaleTimeString()}` : "Save solution"}
+              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              {isSaving ? "Saving…" : savedAt ? "Saved ✓" : "Save"}
+            </button>
             <button
               onClick={handleRun}
               disabled={isRunning || isSubmitting}
@@ -341,6 +380,21 @@ export function CodeWorkspace({
                 ) : (
                   <p className="text-sm text-zinc-500">
                     {isSubmitting ? "Waiting for results…" : "Submit your solution to see results."}
+                  </p>
+                )}
+              </div>
+            )}
+            {bottomTab === "Saved" && (
+              <div className="overflow-y-auto p-4">
+                {savedAt ? (
+                  <p className="text-sm text-emerald-600 dark:text-emerald-400">
+                    ✓ Solution saved at {savedAt.toLocaleTimeString()}
+                  </p>
+                ) : (
+                  <p className="text-sm text-zinc-500">
+                    {userTier === "FREE"
+                      ? "Upgrade to Pro to save solutions."
+                      : "Click Save to store your solution for this problem."}
                   </p>
                 )}
               </div>
