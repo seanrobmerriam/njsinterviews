@@ -1,0 +1,423 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Users ──────────────────────────────────────────────
+
+model User {
+  id               String    @id // Clerk user ID
+  email            String    @unique
+  username         String?   @unique
+  avatarUrl        String?
+  tier             Tier      @default(FREE)
+  stripeCustomerId String?   @unique
+  streakDays       Int       @default(0)
+  lastActiveAt     DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  submissions    Submission[]
+  savedSolutions SavedSolution[]
+  progress       UserProblemProgress[]
+  playlists      PlaylistEnrollment[]
+  hintUsage      HintUsage[]
+  orgMemberships OrgMember[]
+
+  @@map("users")
+}
+
+enum Tier {
+  FREE
+  PRO
+  BUSINESS
+}
+
+// ── Problems ───────────────────────────────────────────
+
+model Problem {
+  id          String     @id @default(cuid())
+  slug        String     @unique
+  title       String
+  description String // Markdown
+  difficulty  Difficulty
+  category    Category
+  tags        String[]
+  isFree      Boolean    @default(false)
+  isPremium   Boolean    @default(false)
+  isActive    Boolean    @default(true)
+  orderIndex  Int        @default(0)
+
+  // Constraints & examples in structured JSON
+  constraints Json?
+  examples    Json // Array of { input, output, explanation }
+  hints       String[] // Ordered hint strings
+
+  // Code scaffold per language
+  starterCode StarterCode[]
+  testCases   TestCase[]
+  solutions   OfficialSolution[]
+
+  submissions   Submission[]
+  progress      UserProblemProgress[]
+  playlistItems PlaylistItem[]
+  setItems      QuestionSetItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([category, difficulty])
+  @@map("problems")
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum Category {
+  ARRAYS_HASHING
+  TWO_POINTERS
+  SLIDING_WINDOW
+  STACK
+  BINARY_SEARCH
+  LINKED_LIST
+  TREES
+  TRIES
+  HEAP
+  GRAPHS
+  DYNAMIC_PROGRAMMING
+  GREEDY
+  INTERVALS
+  MATH_GEOMETRY
+  BIT_MANIPULATION
+  BACKTRACKING
+  SYSTEM_DESIGN
+  BEHAVIORAL
+  SQL
+  FRONTEND
+  GO_TRACK
+  RUST_TRACK
+  PYTHON_TRACK
+  JAVA_TRACK
+  CPP_TRACK
+  TYPESCRIPT_TRACK
+}
+
+model StarterCode {
+  id        String   @id @default(cuid())
+  problemId String
+  language  Language
+  code      String
+  problem   Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@unique([problemId, language])
+  @@map("starter_codes")
+}
+
+enum Language {
+  JAVASCRIPT
+  TYPESCRIPT
+  PYTHON
+  GO
+  RUST
+  JAVA
+  CPP
+  SQL
+  HTML
+}
+
+model TestCase {
+  id          String  @id @default(cuid())
+  problemId   String
+  input       String
+  output      String
+  isHidden    Boolean @default(false)
+  explanation String?
+  problem     Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@map("test_cases")
+}
+
+model OfficialSolution {
+  id              String   @id @default(cuid())
+  problemId       String
+  language        Language
+  code            String
+  explanation     String // Markdown
+  timeComplexity  String
+  spaceComplexity String
+  problem         Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@unique([problemId, language])
+  @@map("official_solutions")
+}
+
+// ── Submissions ────────────────────────────────────────
+
+model Submission {
+  id           String           @id @default(cuid())
+  userId       String
+  problemId    String
+  language     Language
+  code         String
+  status       SubmissionStatus @default(PENDING)
+  runtime      Int? // ms
+  memory       Int? // KB
+  errorMessage String?
+  testsPassed  Int              @default(0)
+  testsTotal   Int              @default(0)
+  judge0Token  String? // Async tracking token
+  submittedAt  DateTime         @default(now())
+
+  // Business context (null for platform submissions)
+  assessmentId String?
+  assessment   Assessment? @relation(fields: [assessmentId], references: [id])
+
+  user    User    @relation(fields: [userId], references: [id])
+  problem Problem @relation(fields: [problemId], references: [id])
+
+  @@index([userId, problemId])
+  @@index([assessmentId])
+  @@map("submissions")
+}
+
+enum SubmissionStatus {
+  PENDING
+  ACCEPTED
+  WRONG_ANSWER
+  TIME_LIMIT_EXCEEDED
+  MEMORY_LIMIT_EXCEEDED
+  RUNTIME_ERROR
+  COMPILE_ERROR
+}
+
+model SavedSolution {
+  id        String   @id @default(cuid())
+  userId    String
+  problemId String
+  language  Language
+  code      String
+  notes     String?
+  savedAt   DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, problemId, language])
+  @@map("saved_solutions")
+}
+
+// ── Progress & Streaks ─────────────────────────────────
+
+model UserProblemProgress {
+  id        String         @id @default(cuid())
+  userId    String
+  problemId String
+  status    ProgressStatus @default(UNSEEN)
+  solvedAt  DateTime?
+  attempts  Int            @default(0)
+
+  user    User    @relation(fields: [userId], references: [id])
+  problem Problem @relation(fields: [problemId], references: [id])
+
+  @@unique([userId, problemId])
+  @@map("user_problem_progress")
+}
+
+enum ProgressStatus {
+  UNSEEN
+  ATTEMPTED
+  SOLVED
+}
+
+// ── Playlists / Study Paths ────────────────────────────
+
+model Playlist {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  description String
+  imageUrl    String?
+  isCurated   Boolean  @default(true)
+  isPro       Boolean  @default(false)
+  orderIndex  Int      @default(0)
+
+  items       PlaylistItem[]
+  enrollments PlaylistEnrollment[]
+
+  @@map("playlists")
+}
+
+model PlaylistItem {
+  id         String @id @default(cuid())
+  playlistId String
+  problemId  String
+  position   Int
+
+  playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  problem  Problem  @relation(fields: [problemId], references: [id])
+
+  @@unique([playlistId, problemId])
+  @@map("playlist_items")
+}
+
+model PlaylistEnrollment {
+  id         String   @id @default(cuid())
+  userId     String
+  playlistId String
+  enrolledAt DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id])
+  playlist Playlist @relation(fields: [playlistId], references: [id])
+
+  @@unique([userId, playlistId])
+  @@map("playlist_enrollments")
+}
+
+// ── Hints (AI) ─────────────────────────────────────────
+
+model HintUsage {
+  id        String   @id @default(cuid())
+  userId    String
+  problemId String
+  hintIndex Int // Which hint (0, 1, 2...)
+  usedAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("hint_usage")
+}
+
+// ── Business / Organizations ───────────────────────────
+
+model Organization {
+  id               String   @id // Clerk org ID
+  name             String
+  slug             String   @unique
+  logoUrl          String?
+  brandColor       String?
+  stripeCustomerId String?  @unique
+  seatCount        Int      @default(5)
+  tier             Tier     @default(BUSINESS)
+  atsWebhookUrl    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  members      OrgMember[]
+  questionSets QuestionSet[]
+  assessments  Assessment[]
+
+  @@map("organizations")
+}
+
+model OrgMember {
+  id       String   @id @default(cuid())
+  userId   String
+  orgId    String
+  role     OrgRole  @default(MEMBER)
+  joinedAt DateTime @default(now())
+
+  user User         @relation(fields: [userId], references: [id])
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orgId])
+  @@map("org_members")
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+// ── Question Sets (Business custom collections) ─────────
+
+model QuestionSet {
+  id          String   @id @default(cuid())
+  orgId       String
+  title       String
+  description String?
+  isArchived  Boolean  @default(false)
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  org         Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  items       QuestionSetItem[]
+  assessments Assessment[]
+
+  @@map("question_sets")
+}
+
+model QuestionSetItem {
+  id            String  @id @default(cuid())
+  questionSetId String
+  problemId     String
+  position      Int
+  timeLimitMins Int?
+
+  questionSet QuestionSet @relation(fields: [questionSetId], references: [id], onDelete: Cascade)
+  problem     Problem     @relation(fields: [problemId], references: [id])
+
+  @@unique([questionSetId, problemId])
+  @@map("question_set_items")
+}
+
+// ── Assessments (Business hiring flow) ─────────────────
+
+model Assessment {
+  id               String     @id @default(cuid())
+  orgId            String
+  questionSetId    String
+  title            String
+  description      String?
+  durationMins     Int        @default(90)
+  expiresAt        DateTime?
+  allowedLanguages Language[]
+  isActive         Boolean    @default(true)
+  createdBy        String
+  createdAt        DateTime   @default(now())
+
+  org         Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  questionSet QuestionSet        @relation(fields: [questionSetId], references: [id])
+  invitations AssessmentInvite[]
+  submissions Submission[]
+
+  @@map("assessments")
+}
+
+model AssessmentInvite {
+  id             String       @id @default(cuid())
+  assessmentId   String
+  candidateEmail String
+  token          String       @unique @default(cuid())
+  status         InviteStatus @default(PENDING)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  expiresAt      DateTime
+  notes          String?
+
+  assessment Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([assessmentId])
+  @@map("assessment_invites")
+}
+
+enum InviteStatus {
+  PENDING
+  OPENED
+  IN_PROGRESS
+  COMPLETED
+  EXPIRED
+}
