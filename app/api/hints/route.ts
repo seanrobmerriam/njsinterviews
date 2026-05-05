@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { currentUser } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { getUserTier } from "@/lib/tier";
+import { generateHint } from "@/lib/claude";
 
 const DAILY_HINT_LIMIT = 10;
 
@@ -17,12 +18,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { problemId, hintIndex } = (await req.json()) as {
+  const { problemId, hintLevel, code, language } = (await req.json()) as {
     problemId: string;
-    hintIndex: number;
+    hintLevel: number;
+    code?: string;
+    language?: string;
   };
 
-  if (!problemId || hintIndex == null) {
+  if (!problemId || hintLevel == null) {
     return NextResponse.json({ error: "Missing fields" }, { status: 400 });
   }
 
@@ -31,10 +34,7 @@ export async function POST(req: NextRequest) {
   startOfDay.setHours(0, 0, 0, 0);
 
   const todayUsage = await prisma.hintUsage.count({
-    where: {
-      userId: user.id,
-      usedAt: { gte: startOfDay },
-    },
+    where: { userId: user.id, usedAt: { gte: startOfDay } },
   });
 
   if (todayUsage >= DAILY_HINT_LIMIT) {
@@ -44,21 +44,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Verify problem exists and hint index is valid
   const problem = await prisma.problem.findUnique({
     where: { id: problemId },
-    select: { hints: true },
+    select: { title: true, description: true },
   });
-
   if (!problem) return NextResponse.json({ error: "Problem not found" }, { status: 404 });
-  if (hintIndex < 0 || hintIndex >= problem.hints.length) {
-    return NextResponse.json({ error: "Invalid hint index" }, { status: 400 });
-  }
 
-  // Record usage
   await prisma.hintUsage.create({
-    data: { userId: user.id, problemId, hintIndex },
+    data: { userId: user.id, problemId, hintIndex: hintLevel },
   });
 
-  return NextResponse.json({ hint: problem.hints[hintIndex] });
+  const hint = await generateHint({
+    problemTitle: problem.title,
+    problemDescription: problem.description,
+    userCode: code ?? "",
+    language: language ?? "unknown",
+    hintLevel: Math.min(hintLevel, 2),
+  });
+
+  return NextResponse.json({ hint });
 }
