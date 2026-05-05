@@ -19,11 +19,13 @@ export async function POST(req: NextRequest) {
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
-      const userId = session.metadata?.["userId"];
-      const tier = session.metadata?.["tier"] as "PRO" | "BUSINESS" | undefined;
-      if (userId && tier) {
+      const clerkUserId = session.metadata?.["clerkUserId"];
+      const priceKey = session.metadata?.["priceKey"] ?? "";
+      const tier: "PRO" | "BUSINESS" =
+        priceKey.startsWith("BUSINESS") ? "BUSINESS" : "PRO";
+      if (clerkUserId) {
         await prisma.user.update({
-          where: { id: userId },
+          where: { id: clerkUserId },
           data: { tier, stripeCustomerId: session.customer as string },
         });
       }
@@ -39,13 +41,8 @@ export async function POST(req: NextRequest) {
     }
     case "customer.subscription.updated": {
       const sub = event.data.object as Stripe.Subscription;
-      const tier = sub.metadata?.["tier"] as "PRO" | "BUSINESS" | undefined;
-      if (tier) {
-        await prisma.user.updateMany({
-          where: { stripeCustomerId: sub.customer as string },
-          data: { tier },
-        });
-      }
+      // Sync subscription ID on creation/update — no-op for now, handled by checkout.session.completed
+      void sub; // subscription data available if needed for future sync
       break;
     }
   }
